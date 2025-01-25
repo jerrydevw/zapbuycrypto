@@ -58,7 +58,7 @@ func main() {
 	r.POST("/comprar", handleBuyCrypto)
 	r.POST("/webhook/whatsapp", handleWhatsAppWebhook)
 
-	r.GET("health-check", healthCheck)
+	r.GET("/", healthCheck)
 
 	err := r.Run(":8080")
 	if err != nil {
@@ -73,6 +73,7 @@ func healthCheck(c *gin.Context) {
 func handleGetBalance(c *gin.Context) {
 	accountInfo, errAccountInfo := getAccountInfo()
 	if errAccountInfo != nil {
+		fmt.Println(errAccountInfo)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao consultar saldo"})
 		return
 	}
