@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,88 +21,109 @@ import (
 )
 
 const (
-	baseURL    = "https://api.binance.com"
-	orderAPI   = "/api/v3/order"
-	accountAPI = "/api/v3/account"
-	BRL        = "BRL"
-	USD        = "USD"
-	EUR        = "EUR"
+	baseURL         = "https://api.binance.com"
+	orderAPI        = "/api/v3/order"
+	accountAPI      = "/api/v3/account"
+	exchangeInfoAPI = "/api/v3/exchangeInfo"
+	BRL             = "BRL"
+	USD             = "USD"
+	EUR             = "EUR"
 )
 
-var apiKey = os.Getenv("BINANCE_API_KEY")
-var secretKey = os.Getenv("BINANCE_SECRET_KEY")
+var (
+	apiKey          = os.Getenv("BINANCE_API_KEY")
+	secretKey       = os.Getenv("BINANCE_SECRET_KEY")
+	whatsappToken   = os.Getenv("WHATSAPP_TOKEN")
+	whatsappPhoneID = os.Getenv("WHATSAPP_PHONE_ID")
+)
 
 func main() {
-	if apiKey == "" || secretKey == "" {
-		fmt.Println("Erro: As variáveis de ambiente BINANCE_API_KEY e BINANCE_SECRET_KEY devem estar configuradas.")
+	if apiKey == "" || secretKey == "" || whatsappToken == "" || whatsappPhoneID == "" {
+		fmt.Println("Erro: As variáveis de ambiente BINANCE_API_KEY, BINANCE_SECRET_KEY, WHATSAPP_TOKEN e WHATSAPP_PHONE_ID devem estar configuradas.")
 		return
 	}
 
 	r := gin.Default()
 
-	r.GET("/saldo", func(c *gin.Context) {
-		accountInfo := getAccountInfo()
-		if accountInfo == nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao consultar saldo"})
-			return
-		}
-
-		fiatBalances := []map[string]interface{}{}
-		for _, balance := range accountInfo.Balances {
-			if isFiat(balance.Asset) {
-				freeAmount, err := strconv.ParseFloat(balance.Free, 64)
-				if err != nil {
-					fmt.Printf("Erro ao converter saldo de %s: %v\n", balance.Asset, err)
-					continue
-				}
-				if freeAmount > 0 {
-					fiatBalances = append(fiatBalances, map[string]interface{}{
-						"asset":  balance.Asset,
-						"amount": freeAmount,
-					})
-				}
-			}
-		}
-
-		if len(fiatBalances) == 0 {
-			c.JSON(http.StatusOK, gin.H{"message": "Nenhum saldo disponível em moedas fiduciárias"})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{"fiat_balances": fiatBalances})
-	})
-
-	r.POST("/comprar", func(c *gin.Context) {
-		var req struct {
-			Crypto string  `json:"crypto" binding:"required"`
-			Amount float64 `json:"amount" binding:"required"`
-		}
-
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Parâmetros inválidos"})
-			return
-		}
-
-		if req.Amount <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "O valor para compra deve ser maior que zero"})
-			return
-		}
-
-		symbol := fmt.Sprintf("%s%s", req.Crypto, BRL)
-		orderResponse := buyCrypto(symbol, req.Amount)
-		if orderResponse == nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao realizar a compra"})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{"order_details": orderResponse})
-	})
+	r.GET("/saldo", handleGetBalance)
+	r.POST("/comprar", handleBuyCrypto)
+	r.POST("/webhook/whatsapp", handleWhatsAppWebhook)
 
 	r.Run(":8080")
 }
 
-func isFiat(asset string) bool {
-	return asset == USD || asset == EUR || asset == BRL
+func handleGetBalance(c *gin.Context) {
+	accountInfo := getAccountInfo()
+	if accountInfo == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao consultar saldo"})
+		return
+	}
+
+	fiatBalances := getFiatBalances(accountInfo)
+	if len(fiatBalances) == 0 {
+		c.JSON(http.StatusOK, gin.H{"message": "Nenhum saldo disponível em moedas fiduciárias"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"fiat_balances": fiatBalances})
+}
+
+func handleBuyCrypto(c *gin.Context) {
+	var req struct {
+		Crypto string  `json:"crypto" binding:"required"`
+		Amount float64 `json:"amount" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Parâmetros inválidos"})
+		return
+	}
+
+	if req.Amount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "O valor para compra deve ser maior que zero"})
+		return
+	}
+
+	symbol := fmt.Sprintf("%s%s", req.Crypto, BRL)
+	if !isTradingPairValid(symbol) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Par de moedas não suportado"})
+		return
+	}
+
+	accountInfo := getAccountInfo()
+	if accountInfo == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao consultar saldo"})
+		return
+	}
+
+	if !hasSufficientBalance(accountInfo, BRL, req.Amount) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Saldo insuficiente para realizar a compra"})
+		return
+	}
+
+	orderResponse := buyCrypto(symbol, req.Amount)
+	if orderResponse == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao realizar a compra"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"order_details": orderResponse})
+}
+
+func getFiatBalances(accountInfo *AccountInfo) []map[string]interface{} {
+	balances := []map[string]interface{}{}
+	for _, balance := range accountInfo.Balances {
+		if isFiat(balance.Asset) {
+			freeAmount, err := strconv.ParseFloat(balance.Free, 64)
+			if err == nil && freeAmount > 0 {
+				balances = append(balances, map[string]interface{}{
+					"asset":  balance.Asset,
+					"amount": freeAmount,
+				})
+			}
+		}
+	}
+	return balances
 }
 
 func getAccountInfo() *AccountInfo {
@@ -153,7 +176,7 @@ func buyCrypto(symbol string, fiatAmount float64) map[string]interface{} {
 	data.Set("symbol", symbol)
 	data.Set("side", "BUY")
 	data.Set("type", "MARKET")
-	data.Set("quoteOrderQty", fmt.Sprintf("%.2f", fiatAmount)) // Quantidade em BRL
+	data.Set("quoteOrderQty", fmt.Sprintf("%.2f", fiatAmount))
 	data.Set("timestamp", timestamp)
 
 	signature := createSignature(secretKey, data.Encode())
@@ -194,6 +217,21 @@ func buyCrypto(symbol string, fiatAmount float64) map[string]interface{} {
 	return response
 }
 
+func isTradingPairValid(pair string) bool {
+	// todo
+	return true
+}
+
+func hasSufficientBalance(accountInfo *AccountInfo, asset string, requiredAmount float64) bool {
+	for _, balance := range accountInfo.Balances {
+		if balance.Asset == asset {
+			free, err := strconv.ParseFloat(balance.Free, 64)
+			return err == nil && free >= requiredAmount
+		}
+	}
+	return false
+}
+
 func createSignature(secretKey, data string) string {
 	h := hmac.New(sha256.New, []byte(secretKey))
 	h.Write([]byte(data))
@@ -205,4 +243,146 @@ type AccountInfo struct {
 		Asset string `json:"asset"`
 		Free  string `json:"free"`
 	} `json:"balances"`
+}
+
+func handleWhatsAppWebhook(c *gin.Context) {
+	var req struct {
+		Entry []struct {
+			Changes []struct {
+				Value struct {
+					Messages []struct {
+						From string `json:"from"`
+						Text struct {
+							Body string `json:"body"`
+						} `json:"text"`
+					} `json:"messages"`
+				} `json:"value"`
+			} `json:"changes"`
+		} `json:"entry"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Payload inválido"})
+		return
+	}
+
+	if len(req.Entry) == 0 || len(req.Entry[0].Changes) == 0 || len(req.Entry[0].Changes[0].Value.Messages) == 0 {
+		c.JSON(http.StatusOK, gin.H{"status": "Nenhuma mensagem recebida"})
+		return
+	}
+
+	message := req.Entry[0].Changes[0].Value.Messages[0]
+	from := message.From
+	body := strings.ToLower(strings.TrimSpace(message.Text.Body))
+
+	switch {
+	case strings.Contains(body, "saldo") && strings.Contains(body, "reais"):
+		accountInfo := getAccountInfo()
+		if accountInfo == nil {
+			replyWhatsApp(from, "Erro ao consultar saldo.")
+			return
+		}
+
+		brlBalance := 0.0
+		for _, balance := range accountInfo.Balances {
+			if balance.Asset == BRL {
+				freeAmount, err := strconv.ParseFloat(balance.Free, 64)
+				if err != nil {
+					continue
+				}
+				brlBalance = freeAmount
+				break
+			}
+		}
+
+		if brlBalance > 0 {
+			replyWhatsApp(from, fmt.Sprintf("Seu saldo em reais é: R$ %.2f", brlBalance))
+		} else {
+			replyWhatsApp(from, "Você não tem saldo disponível em reais.")
+		}
+
+	case strings.HasPrefix(body, "comprar"):
+		parts := strings.Fields(body)
+		if len(parts) != 4 {
+			replyWhatsApp(from, "Formato inválido. Use: comprar <valor> em <cripto> (exemplo: comprar 100R$ em BTC)")
+			return
+		}
+
+		valueStr := strings.Replace(parts[1], "r$", "", -1)
+		valueStr = strings.Replace(valueStr, ",", ".", -1)
+		amount, err := strconv.ParseFloat(valueStr, 64)
+		if err != nil || amount <= 0 {
+			replyWhatsApp(from, "O valor para compra deve ser válido e maior que zero.")
+			return
+		}
+
+		crypto := strings.ToUpper(parts[3])
+
+		if !isTradingPairValid(crypto + BRL) {
+			replyWhatsApp(from, fmt.Sprintf("Desculpe, o par de moedas %s/BRL não é suportado.", crypto))
+			return
+		}
+
+		accountInfo := getAccountInfo()
+		if accountInfo == nil {
+			replyWhatsApp(from, "Erro ao validar saldo para compra.")
+			return
+		}
+
+		if !hasSufficientBalance(accountInfo, BRL, amount) {
+			replyWhatsApp(from, "Saldo insuficiente para realizar a compra.")
+			return
+		}
+
+		orderResponse := buyCrypto(crypto+BRL, amount)
+		if orderResponse == nil {
+			replyWhatsApp(from, "Erro ao realizar a compra.")
+			return
+		}
+
+		replyWhatsApp(from, fmt.Sprintf("Compra realizada com sucesso!\nMoeda: %s\nValor: R$ %.2f\nID do Pedido: %v", crypto, amount, orderResponse["orderId"]))
+
+	default:
+		replyWhatsApp(from, "Desculpe, não reconheço este comando. Envie 'ajuda' para listar os comandos disponíveis.")
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "Mensagem processada com sucesso"})
+}
+
+func replyWhatsApp(to string, message string) {
+	data := map[string]string{
+		"phone": to,
+		"body":  message,
+	}
+	bytesRepresentation, err := json.Marshal(data)
+	if err != nil {
+		log.Fatalf("Can't marshal to JSON: %s", err)
+	}
+
+	req, err := http.NewRequest("POST", "WHATSAPP_API_URL", bytes.NewBuffer(bytesRepresentation))
+	if err != nil {
+		log.Fatalf("Can't create new request: %s", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+"WHATSAPP_API_TOKEN")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client := &http.Client{}
+	_, err = client.Do(req.WithContext(ctx))
+	if err != nil {
+		log.Printf("Can't send WhatsApp message: %s", err)
+	}
+}
+
+func isFiat(currency string) bool {
+	fiatCurrencies := map[string]bool{
+		"BRL": true,
+		"USD": true,
+		"EUR": true,
+	}
+
+	_, isFiat := fiatCurrencies[currency]
+	return isFiat
 }
