@@ -71,6 +71,7 @@ func healthCheck(c *gin.Context) {
 }
 
 func handleGetBalance(c *gin.Context) {
+	fmt.Println("get balance")
 	accountInfo, errAccountInfo := getAccountInfo()
 	if errAccountInfo != nil {
 		fmt.Println(errAccountInfo)
@@ -261,6 +262,7 @@ type AccountInfo struct {
 }
 
 func handleWhatsAppWebhook(c *gin.Context) {
+	fmt.Println("recebendo hook whatsapp")
 	var req struct {
 		Entry []struct {
 			Changes []struct {
@@ -280,6 +282,8 @@ func handleWhatsAppWebhook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Payload inválido"})
 		return
 	}
+
+	fmt.Printf("req %+v\n", req)
 
 	if len(req.Entry) == 0 || len(req.Entry[0].Changes) == 0 || len(req.Entry[0].Changes[0].Value.Messages) == 0 {
 		c.JSON(http.StatusOK, gin.H{"status": "Nenhuma mensagem recebida"})
