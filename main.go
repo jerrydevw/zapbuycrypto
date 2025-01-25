@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -37,10 +38,18 @@ var (
 	whatsappPhoneID = os.Getenv("WHATSAPP_PHONE_ID")
 )
 
+func handlePanic() {
+	if r := recover(); r != nil {
+		log.Println("ERROR:", r)
+		debug.PrintStack()
+		fmt.Println("Stack Trace:\n", string(debug.Stack()))
+	}
+}
+
 func main() {
+	defer handlePanic()
 	if apiKey == "" || secretKey == "" || whatsappToken == "" || whatsappPhoneID == "" {
-		fmt.Println("Erro: As variáveis de ambiente BINANCE_API_KEY, BINANCE_SECRET_KEY, WHATSAPP_TOKEN e WHATSAPP_PHONE_ID devem estar configuradas.")
-		return
+		log.Fatal("Erro: As variáveis de ambiente BINANCE_API_KEY, BINANCE_SECRET_KEY, WHATSAPP_TOKEN e WHATSAPP_PHONE_ID devem estar configuradas.")
 	}
 
 	r := gin.Default()
@@ -49,12 +58,21 @@ func main() {
 	r.POST("/comprar", handleBuyCrypto)
 	r.POST("/webhook/whatsapp", handleWhatsAppWebhook)
 
-	r.Run(":8080")
+	r.GET("health-check", healthCheck)
+
+	err := r.Run(":8080")
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func healthCheck(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": 200})
 }
 
 func handleGetBalance(c *gin.Context) {
-	accountInfo := getAccountInfo()
-	if accountInfo == nil {
+	accountInfo, errAccountInfo := getAccountInfo()
+	if errAccountInfo != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao consultar saldo"})
 		return
 	}
@@ -90,8 +108,8 @@ func handleBuyCrypto(c *gin.Context) {
 		return
 	}
 
-	accountInfo := getAccountInfo()
-	if accountInfo == nil {
+	accountInfo, errAccountInfo := getAccountInfo()
+	if errAccountInfo != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao consultar saldo"})
 		return
 	}
@@ -111,7 +129,7 @@ func handleBuyCrypto(c *gin.Context) {
 }
 
 func getFiatBalances(accountInfo *AccountInfo) []map[string]interface{} {
-	balances := []map[string]interface{}{}
+	var balances []map[string]interface{}
 	for _, balance := range accountInfo.Balances {
 		if isFiat(balance.Asset) {
 			freeAmount, err := strconv.ParseFloat(balance.Free, 64)
@@ -126,7 +144,7 @@ func getFiatBalances(accountInfo *AccountInfo) []map[string]interface{} {
 	return balances
 }
 
-func getAccountInfo() *AccountInfo {
+func getAccountInfo() (*AccountInfo, error) {
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	queryString := "timestamp=" + timestamp
 	signature := createSignature(secretKey, queryString)
@@ -134,8 +152,7 @@ func getAccountInfo() *AccountInfo {
 
 	req, err := http.NewRequest("GET", fullURL, nil)
 	if err != nil {
-		fmt.Println("Erro ao criar requisição para saldo:", err)
-		return nil
+		return nil, err
 	}
 	req.Header.Set("X-MBX-APIKEY", apiKey)
 
@@ -145,28 +162,25 @@ func getAccountInfo() *AccountInfo {
 	client := &http.Client{}
 	resp, err := client.Do(req.WithContext(ctx))
 	if err != nil {
-		fmt.Println("Erro ao consultar saldo:", err)
-		return nil
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println("Erro ao ler resposta do saldo:", err)
-		return nil
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("Erro ao consultar saldo: %s\n", string(body))
-		return nil
+		return nil, fmt.Errorf("Erro ao consultar saldo: %s", string(body))
 	}
 
 	var accountInfo AccountInfo
 	if err := json.Unmarshal(body, &accountInfo); err != nil {
-		fmt.Println("Erro ao decodificar resposta do saldo:", err)
-		return nil
+		return nil, fmt.Errorf("Erro ao decodificar resposta do saldo: %v", err)
 	}
-	return &accountInfo
+
+	return &accountInfo, nil
 }
 
 func buyCrypto(symbol string, fiatAmount float64) map[string]interface{} {
@@ -277,8 +291,8 @@ func handleWhatsAppWebhook(c *gin.Context) {
 
 	switch {
 	case strings.Contains(body, "saldo") && strings.Contains(body, "reais"):
-		accountInfo := getAccountInfo()
-		if accountInfo == nil {
+		accountInfo, errAccountinfo := getAccountInfo()
+		if errAccountinfo != nil {
 			replyWhatsApp(from, "Erro ao consultar saldo.")
 			return
 		}
@@ -323,8 +337,8 @@ func handleWhatsAppWebhook(c *gin.Context) {
 			return
 		}
 
-		accountInfo := getAccountInfo()
-		if accountInfo == nil {
+		accountInfo, errAccountInfo := getAccountInfo()
+		if errAccountInfo != nil {
 			replyWhatsApp(from, "Erro ao validar saldo para compra.")
 			return
 		}
