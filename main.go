@@ -60,7 +60,7 @@ func main() {
 
 	r.GET("/", healthCheck)
 
-	err := r.Run(":80")
+	err := r.Run(":8080")
 	if err != nil {
 		log.Fatal(err)
 	}
