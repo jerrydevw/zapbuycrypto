@@ -408,9 +408,27 @@ func replyWhatsApp(to string, message string) {
 	defer cancel()
 
 	client := &http.Client{}
-	_, err = client.Do(req.WithContext(ctx))
+	responseZap, err := client.Do(req.WithContext(ctx))
 	if err != nil {
 		log.Printf("Can't send WhatsApp message: %s", err)
+	}
+
+	fmt.Println("lendo response:", responseZap.Status)
+	if responseZap != nil {
+		defer responseZap.Body.Close() // Feche o corpo da resposta quando terminar
+		bodyBytes, err := io.ReadAll(responseZap.Body)
+		if err != nil {
+			log.Printf("Error reading response body: %s", err)
+		}
+
+		var prettyJSON bytes.Buffer
+		err = json.Indent(&prettyJSON, bodyBytes, "", "\t")
+		if err != nil {
+			log.Printf("Error indenting JSON: %s", err)
+		} else {
+			fmt.Println("Response:")
+			fmt.Println(string(prettyJSON.Bytes()))
+		}
 	}
 }
 
