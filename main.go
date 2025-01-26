@@ -387,8 +387,9 @@ func handleWhatsAppWebhook(c *gin.Context) {
 
 func replyWhatsApp(to string, message string) {
 	data := map[string]string{
-		"phone": to,
-		"body":  message,
+		"messaging_product": "whatsapp",
+		"phone":             to,
+		"body":              message,
 	}
 	bytesRepresentation, err := json.Marshal(data)
 	if err != nil {
