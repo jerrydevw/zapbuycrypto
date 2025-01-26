@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -36,6 +37,8 @@ var (
 	secretKey       = os.Getenv("BINANCE_SECRET_KEY")
 	whatsappToken   = os.Getenv("WHATSAPP_TOKEN")
 	whatsappPhoneID = os.Getenv("WHATSAPP_PHONE_ID")
+	whatsappApiUrl  = os.Getenv("WHATSAPP_API_URL")
+	whatsappPhoneId = os.Getenv("WHATSAPP_PHONE_ID")
 )
 
 func handlePanic() {
@@ -393,12 +396,14 @@ func replyWhatsApp(to string, message string) {
 		log.Fatalf("Can't marshal to JSON: %s", err)
 	}
 
-	req, err := http.NewRequest("POST", "WHATSAPP_API_URL", bytes.NewBuffer(bytesRepresentation))
+	urlApiWhatsApp := path.Join(os.Getenv("WHATSAPP_API_URL"), os.Getenv("WHATSAPP_PHONE_ID"), "messages")
+
+	req, err := http.NewRequest("POST", urlApiWhatsApp, bytes.NewBuffer(bytesRepresentation))
 	if err != nil {
 		log.Fatalf("Can't create new request: %s", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+"WHATSAPP_API_TOKEN")
+	req.Header.Set("Authorization", "Bearer "+os.Getenv("WHATSAPP_TOKEN"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
