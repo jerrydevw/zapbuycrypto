@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -396,7 +395,7 @@ func replyWhatsApp(to string, message string) {
 		log.Fatalf("Can't marshal to JSON: %s", err)
 	}
 
-	urlApiWhatsApp := path.Join(os.Getenv("WHATSAPP_API_URL"), os.Getenv("WHATSAPP_PHONE_ID"), "messages")
+	urlApiWhatsApp := fmt.Sprintf("%s/%s/messages", os.Getenv("WHATSAPP_API_URL"), os.Getenv("WHATSAPP_PHONE_ID"))
 
 	req, err := http.NewRequest("POST", urlApiWhatsApp, bytes.NewBuffer(bytesRepresentation))
 	if err != nil {
