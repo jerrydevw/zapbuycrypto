@@ -389,7 +389,7 @@ func replyWhatsApp(to string, message string) {
 	data := map[string]string{
 		"messaging_product": "whatsapp",
 		"to":                to,
-		"body":              message,
+		"text":              message,
 	}
 	bytesRepresentation, err := json.Marshal(data)
 	if err != nil {
