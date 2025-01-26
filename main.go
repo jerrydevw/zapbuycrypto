@@ -386,11 +386,17 @@ func handleWhatsAppWebhook(c *gin.Context) {
 }
 
 func replyWhatsApp(to string, message string) {
-	data := map[string]string{
+	data := map[string]interface{}{
 		"messaging_product": "whatsapp",
+		"recipient_type":    "individual",
 		"to":                to,
-		"text":              message,
+		"type":              "text",
+		"text": map[string]interface{}{
+			"preview_url": false,
+			"body":        message,
+		},
 	}
+
 	bytesRepresentation, err := json.Marshal(data)
 	if err != nil {
 		log.Fatalf("Can't marshal to JSON: %s", err)
@@ -415,21 +421,19 @@ func replyWhatsApp(to string, message string) {
 	}
 
 	fmt.Println("lendo response:", responseZap.Status)
-	if responseZap != nil {
-		defer responseZap.Body.Close() // Feche o corpo da resposta quando terminar
-		bodyBytes, err := io.ReadAll(responseZap.Body)
-		if err != nil {
-			log.Printf("Error reading response body: %s", err)
-		}
+	defer responseZap.Body.Close()
+	bodyBytes, err := io.ReadAll(responseZap.Body)
+	if err != nil {
+		log.Printf("Error reading response body: %s", err)
+	}
 
-		var prettyJSON bytes.Buffer
-		err = json.Indent(&prettyJSON, bodyBytes, "", "\t")
-		if err != nil {
-			log.Printf("Error indenting JSON: %s", err)
-		} else {
-			fmt.Println("Response:")
-			fmt.Println(string(prettyJSON.Bytes()))
-		}
+	var prettyJSON bytes.Buffer
+	err = json.Indent(&prettyJSON, bodyBytes, "", "\t")
+	if err != nil {
+		log.Printf("Error indenting JSON: %s", err)
+	} else {
+		fmt.Println("Response:")
+		fmt.Println(string(prettyJSON.Bytes()))
 	}
 }
 
