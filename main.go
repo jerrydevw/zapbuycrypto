@@ -267,7 +267,7 @@ func verifyWebhook(c *gin.Context) {
 	challenge := c.Query("hub.challenge")
 	verifyToken := c.Query("hub.verify_token")
 
-	expectedToken := os.Getenv("WHATSAPP_VERIFY_TOKEN") // Use uma variável de ambiente
+	expectedToken := os.Getenv("WHATSAPP_TOKEN")
 
 	if mode == "subscribe" && verifyToken == expectedToken {
 		c.String(http.StatusOK, challenge)
