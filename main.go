@@ -54,10 +54,10 @@ func main() {
 
 	r := gin.Default()
 
-	r.GET("/saldo", handleGetBalance)
-	r.POST("/comprar", handleBuyCrypto)
-	r.POST("/webhook/whatsapp", handleWhatsAppWebhook)
-	r.GET("/webhook", verifyWebhook)
+	r.GET("/binace/saldo", handleGetBalance)
+	r.POST("/binance/comprar", handleBuyCrypto)
+	r.POST("/whatsapp/webhook", handleWhatsAppWebhook)
+	r.GET("/whatsapp/webhook", verifyWebhook)
 
 	r.GET("/", healthCheck)
 
