@@ -57,6 +57,7 @@ func main() {
 	r.GET("/saldo", handleGetBalance)
 	r.POST("/comprar", handleBuyCrypto)
 	r.POST("/webhook/whatsapp", handleWhatsAppWebhook)
+	r.GET("/webhook", verifyWebhook)
 
 	r.GET("/", healthCheck)
 
@@ -259,6 +260,20 @@ type AccountInfo struct {
 		Asset string `json:"asset"`
 		Free  string `json:"free"`
 	} `json:"balances"`
+}
+
+func verifyWebhook(c *gin.Context) {
+	mode := c.Query("hub.mode")
+	challenge := c.Query("hub.challenge")
+	verifyToken := c.Query("hub.verify_token")
+
+	expectedToken := os.Getenv("WHATSAPP_VERIFY_TOKEN") // Use uma variável de ambiente
+
+	if mode == "subscribe" && verifyToken == expectedToken {
+		c.String(http.StatusOK, challenge)
+	} else {
+		c.String(http.StatusForbidden, "Forbidden")
+	}
 }
 
 func handleWhatsAppWebhook(c *gin.Context) {
