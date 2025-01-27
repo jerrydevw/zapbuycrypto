@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	logging "cloud.google.com/go/logging"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -38,6 +39,7 @@ var (
 	whatsappPhoneID = os.Getenv("WHATSAPP_PHONE_ID")
 	whatsappApiUrl  = os.Getenv("WHATSAPP_API_URL")
 	whatsappPhoneId = os.Getenv("WHATSAPP_PHONE_ID")
+	logger          *logging.Logger
 )
 
 func handlePanic() {
@@ -50,20 +52,29 @@ func handlePanic() {
 
 func main() {
 	defer handlePanic()
+	ctx := context.Background()
+	client, err := logging.NewClient(ctx, "zapbuycrypto")
+	if err != nil {
+		log.Fatalf("Falha ao criar cliente do Cloud Logging: %v", err)
+	}
+	defer client.Close()
+
+	logger = client.Logger("whatsappcoin")
+
 	if apiKey == "" || secretKey == "" || whatsappToken == "" || whatsappPhoneID == "" {
 		log.Fatal("Erro: As variáveis de ambiente BINANCE_API_KEY, BINANCE_SECRET_KEY, WHATSAPP_TOKEN e WHATSAPP_PHONE_ID devem estar configuradas.")
 	}
 
 	r := gin.Default()
 
-	r.GET("/binace/saldo", handleGetBalance)
+	r.GET("/binance/saldo", handleGetBalance)
 	r.POST("/binance/comprar", handleBuyCrypto)
 	r.POST("/whatsapp/webhook", handleWhatsAppWebhook)
 	r.GET("/whatsapp/webhook", verifyWebhook)
 
 	r.GET("/", healthCheck)
 
-	err := r.Run(":8080")
+	err = r.Run(":8080")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -74,16 +85,17 @@ func healthCheck(c *gin.Context) {
 }
 
 func handleGetBalance(c *gin.Context) {
-	fmt.Println("get balance")
+	logInfo("buscando saldo")
 	accountInfo, errAccountInfo := getAccountInfo()
 	if errAccountInfo != nil {
-		fmt.Println(errAccountInfo)
+		logError("Erro ao buscando saldo", errAccountInfo, nil)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao consultar saldo"})
 		return
 	}
 
 	fiatBalances := getFiatBalances(accountInfo)
 	if len(fiatBalances) == 0 {
+		logInfo("Nenhum saldo disponível em moedas fiduciárias")
 		c.JSON(http.StatusOK, gin.H{"message": "Nenhum saldo disponível em moedas fiduciárias"})
 		return
 	}
@@ -98,34 +110,40 @@ func handleBuyCrypto(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
+		logError("Parâmetros inválidos", err, nil)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Parâmetros inválidos"})
 		return
 	}
 
 	if req.Amount <= 0 {
+		logInfo("O valor para compra deve ser maior que zero")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "O valor para compra deve ser maior que zero"})
 		return
 	}
 
 	symbol := fmt.Sprintf("%s%s", req.Crypto, BRL)
 	if !isTradingPairValid(symbol) {
+		logInfo("Par de moedas não suportado")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Par de moedas não suportado"})
 		return
 	}
 
 	accountInfo, errAccountInfo := getAccountInfo()
 	if errAccountInfo != nil {
+		logError("Erro ao buscando saldo", errAccountInfo, nil)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao consultar saldo"})
 		return
 	}
 
 	if !hasSufficientBalance(accountInfo, BRL, req.Amount) {
+		logInfo("Saldo insuficiente para realizar a compra")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Saldo insuficiente para realizar a compra"})
 		return
 	}
 
 	orderResponse := buyCrypto(symbol, req.Amount)
 	if orderResponse == nil {
+		logError("Erro ao realizar a compra", nil, nil)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao realizar a compra"})
 		return
 	}
@@ -177,11 +195,13 @@ func getAccountInfo() (*AccountInfo, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		logError("Erro ao consultar saldo na api parceira", nil, resp)
 		return nil, fmt.Errorf("Erro ao consultar saldo: %s", string(body))
 	}
 
 	var accountInfo AccountInfo
 	if err := json.Unmarshal(body, &accountInfo); err != nil {
+		logError("Erro ao consultar saldo", err, nil)
 		return nil, fmt.Errorf("Erro ao decodificar resposta do saldo: %v", err)
 	}
 
@@ -446,4 +466,24 @@ func isFiat(currency string) bool {
 
 	_, isFiat := fiatCurrencies[currency]
 	return isFiat
+}
+
+func logError(message string, err error, payload interface{}) {
+	logger.Log(logging.Entry{
+		Timestamp: time.Now(),
+		Severity:  logging.Error,
+		Payload: map[string]interface{}{
+			"message": message,
+			"error":   err.Error(),
+			"details": payload,
+		},
+	})
+}
+
+func logInfo(message string) {
+	logger.Log(logging.Entry{
+		Timestamp: time.Now(),
+		Severity:  logging.Info,
+		Payload:   message,
+	})
 }
