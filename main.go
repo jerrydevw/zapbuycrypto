@@ -57,21 +57,13 @@ func main() {
 		whatsappToken = secret.Value["WHATSAPP_TOKEN"].(string)
 		whatsappApiUrl = secret.Value["WHATSAPP_API_URL"].(string)
 	}
-	ctx := context.Background()
-	client, err := logging.NewClient(ctx, "zapbuycrypto")
-	if err != nil {
-		log.Fatalf("Falha ao criar cliente do Cloud Logging: %v", err)
-	}
-	defer client.Close()
-
-	logger = client.Logger("whatsappcoin")
 
 	r := gin.Default()
 
 	r.POST("/whatsapp/webhook", handleWhatsAppWebhook)
 	r.GET("/whatsapp/webhook", verifyWebhook)
 
-	r.GET("/", healthCheck)
+	r.GET("/health-check", healthCheck)
 
 	err = r.Run(":8080")
 	if err != nil {
@@ -81,89 +73,6 @@ func main() {
 
 func healthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": 200})
-}
-
-func handleGetBalance(c *gin.Context) {
-	logInfo("buscando saldo")
-	accountInfo, errAccountInfo := getAccountInfo()
-	if errAccountInfo != nil {
-		logError("Erro ao buscando saldo", errAccountInfo, nil)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao consultar saldo"})
-		return
-	}
-
-	fiatBalances := getFiatBalances(accountInfo)
-	if len(fiatBalances) == 0 {
-		logInfo("Nenhum saldo disponível em moedas fiduciárias")
-		c.JSON(http.StatusOK, gin.H{"message": "Nenhum saldo disponível em moedas fiduciárias"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"fiat_balances": fiatBalances})
-}
-
-func handleBuyCrypto(c *gin.Context) {
-	var req struct {
-		Crypto string  `json:"crypto" binding:"required"`
-		Amount float64 `json:"amount" binding:"required"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		logError("Parâmetros inválidos", err, nil)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Parâmetros inválidos"})
-		return
-	}
-
-	if req.Amount <= 0 {
-		logInfo("O valor para compra deve ser maior que zero")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "O valor para compra deve ser maior que zero"})
-		return
-	}
-
-	symbol := fmt.Sprintf("%s%s", req.Crypto, BRL)
-	if !isTradingPairValid(symbol) {
-		logInfo("Par de moedas não suportado")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Par de moedas não suportado"})
-		return
-	}
-
-	accountInfo, errAccountInfo := getAccountInfo()
-	if errAccountInfo != nil {
-		logError("Erro ao buscando saldo", errAccountInfo, nil)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao consultar saldo"})
-		return
-	}
-
-	if !hasSufficientBalance(accountInfo, BRL, req.Amount) {
-		logInfo("Saldo insuficiente para realizar a compra")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Saldo insuficiente para realizar a compra"})
-		return
-	}
-
-	orderResponse := buyCrypto(symbol, req.Amount)
-	if orderResponse == nil {
-		logError("Erro ao realizar a compra", nil, nil)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao realizar a compra"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"order_details": orderResponse})
-}
-
-func getFiatBalances(accountInfo *AccountInfo) []map[string]interface{} {
-	var balances []map[string]interface{}
-	for _, balance := range accountInfo.Balances {
-		if isFiat(balance.Asset) {
-			freeAmount, err := strconv.ParseFloat(balance.Free, 64)
-			if err == nil && freeAmount > 0 {
-				balances = append(balances, map[string]interface{}{
-					"asset":  balance.Asset,
-					"amount": freeAmount,
-				})
-			}
-		}
-	}
-	return balances
 }
 
 func getAccountInfo() (*AccountInfo, error) {
@@ -194,13 +103,11 @@ func getAccountInfo() (*AccountInfo, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		logError("Erro ao consultar saldo na api parceira", nil, resp)
 		return nil, fmt.Errorf("Erro ao consultar saldo: %s", string(body))
 	}
 
 	var accountInfo AccountInfo
 	if err := json.Unmarshal(body, &accountInfo); err != nil {
-		logError("Erro ao consultar saldo", err, nil)
 		return nil, fmt.Errorf("Erro ao decodificar resposta do saldo: %v", err)
 	}
 
@@ -469,26 +376,6 @@ func isFiat(currency string) bool {
 	return isFiat
 }
 
-func logError(message string, err error, payload interface{}) {
-	logger.Log(logging.Entry{
-		Timestamp: time.Now(),
-		Severity:  logging.Error,
-		Payload: map[string]interface{}{
-			"message": message,
-			"error":   err.Error(),
-			"details": payload,
-		},
-	})
-}
-
-func logInfo(message string) {
-	logger.Log(logging.Entry{
-		Timestamp: time.Now(),
-		Severity:  logging.Info,
-		Payload:   message,
-	})
-}
-
 type Secret struct {
 	Name  string
 	Value map[string]interface{}
@@ -511,13 +398,11 @@ func accessSecretVersion(name string) (*Secret, error) {
 	// Call the API.
 	result, err := client.AccessSecretVersion(ctx, accessRequest)
 	if err != nil {
-		logError("failed to access secret version", err, nil)
 		return nil, err
 	}
 
 	var secretData map[string]interface{}
 	if err := json.Unmarshal(result.Payload.Data, &secretData); err != nil {
-		logError("failed to unmarshal secret data", err, nil)
 		return nil, err
 	}
 
