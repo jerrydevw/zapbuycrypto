@@ -277,11 +277,6 @@ func handleWhatsAppWebhook(c *gin.Context) {
 
 		crypto := strings.ToUpper(parts[3])
 
-		if !isTradingPairValid(crypto + BRL) {
-			replyWhatsApp(from, fmt.Sprintf("Desculpe, o par de moedas %s/BRL não é suportado.", crypto))
-			return
-		}
-
 		accountInfo, errAccountInfo := getAccountInfo()
 		if errAccountInfo != nil {
 			replyWhatsApp(from, "Erro ao validar saldo para compra.")
