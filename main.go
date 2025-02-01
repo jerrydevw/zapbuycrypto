@@ -2,44 +2,41 @@ package main
 
 import (
 	"bytes"
-	logging "cloud.google.com/go/logging"
+	"cloud.google.com/go/logging"
+	secretmanager "cloud.google.com/go/secretmanager/apiv1"
+	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/gin-gonic/gin"
+	"google.golang.org/api/option"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/gin-gonic/gin"
 )
 
 const (
-	baseURL         = "https://api.binance.com"
-	orderAPI        = "/api/v3/order"
-	accountAPI      = "/api/v3/account"
-	exchangeInfoAPI = "/api/v3/exchangeInfo"
-	BRL             = "BRL"
-	USD             = "USD"
-	EUR             = "EUR"
+	baseURL    = "https://api.binance.com"
+	orderAPI   = "/api/v3/order"
+	accountAPI = "/api/v3/account"
+	BRL        = "BRL"
 )
 
 var (
-	apiKey          = os.Getenv("BINANCE_API_KEY")
-	secretKey       = os.Getenv("BINANCE_SECRET_KEY")
-	whatsappToken   = os.Getenv("WHATSAPP_TOKEN")
-	whatsappPhoneID = os.Getenv("WHATSAPP_PHONE_ID")
-	whatsappApiUrl  = os.Getenv("WHATSAPP_API_URL")
-	whatsappPhoneId = os.Getenv("WHATSAPP_PHONE_ID")
-	logger          *logging.Logger
+	binanceApiKey    = ""
+	binanceSecretKey = ""
+	whatsappToken    = ""
+	whatsappApiUrl   = ""
+	whatsappPhoneId  = ""
+	logger           *logging.Logger
 )
 
 func handlePanic() {
@@ -52,6 +49,15 @@ func handlePanic() {
 
 func main() {
 	defer handlePanic()
+	secret, err := accessSecretVersion("whatsappConfigs")
+	if err != nil {
+		log.Fatalf("Falha ao acessar o segredo: %v", err)
+	}
+	if secret != nil {
+		whatsappPhoneId = secret.Value["WHATSAPP_PHONE_ID"].(string)
+		whatsappToken = secret.Value["WHATSAPP_TOKEN"].(string)
+		whatsappApiUrl = secret.Value["WHATSAPP_API_URL"].(string)
+	}
 	ctx := context.Background()
 	client, err := logging.NewClient(ctx, "zapbuycrypto")
 	if err != nil {
@@ -61,14 +67,8 @@ func main() {
 
 	logger = client.Logger("whatsappcoin")
 
-	if apiKey == "" || secretKey == "" || whatsappToken == "" || whatsappPhoneID == "" {
-		log.Fatal("Erro: As variáveis de ambiente BINANCE_API_KEY, BINANCE_SECRET_KEY, WHATSAPP_TOKEN e WHATSAPP_PHONE_ID devem estar configuradas.")
-	}
-
 	r := gin.Default()
 
-	r.GET("/binance/saldo", handleGetBalance)
-	r.POST("/binance/comprar", handleBuyCrypto)
 	r.POST("/whatsapp/webhook", handleWhatsAppWebhook)
 	r.GET("/whatsapp/webhook", verifyWebhook)
 
@@ -170,14 +170,14 @@ func getFiatBalances(accountInfo *AccountInfo) []map[string]interface{} {
 func getAccountInfo() (*AccountInfo, error) {
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	queryString := "timestamp=" + timestamp
-	signature := createSignature(secretKey, queryString)
+	signature := createSignature(binanceSecretKey, queryString)
 	fullURL := fmt.Sprintf("%s%s?%s&signature=%s", baseURL, accountAPI, queryString, signature)
 
 	req, err := http.NewRequest("GET", fullURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-MBX-APIKEY", apiKey)
+	req.Header.Set("X-MBX-APIKEY", binanceApiKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -218,7 +218,7 @@ func buyCrypto(symbol string, fiatAmount float64) map[string]interface{} {
 	data.Set("quoteOrderQty", fmt.Sprintf("%.2f", fiatAmount))
 	data.Set("timestamp", timestamp)
 
-	signature := createSignature(secretKey, data.Encode())
+	signature := createSignature(binanceSecretKey, data.Encode())
 	data.Set("signature", signature)
 
 	req, err := http.NewRequest("POST", baseURL+orderAPI, strings.NewReader(data.Encode()))
@@ -226,7 +226,7 @@ func buyCrypto(symbol string, fiatAmount float64) map[string]interface{} {
 		fmt.Println("Erro ao criar requisição de compra:", err)
 		return nil
 	}
-	req.Header.Set("X-MBX-APIKEY", apiKey)
+	req.Header.Set("X-MBX-APIKEY", binanceApiKey)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	client := &http.Client{}
@@ -289,7 +289,7 @@ func verifyWebhook(c *gin.Context) {
 	challenge := c.Query("hub.challenge")
 	verifyToken := c.Query("hub.verify_token")
 
-	expectedToken := os.Getenv("WHATSAPP_TOKEN")
+	expectedToken := whatsappToken
 
 	if mode == "subscribe" && verifyToken == expectedToken {
 		c.String(http.StatusOK, challenge)
@@ -320,8 +320,6 @@ func handleWhatsAppWebhook(c *gin.Context) {
 		return
 	}
 
-	fmt.Printf("req %+v\n", req)
-
 	if len(req.Entry) == 0 || len(req.Entry[0].Changes) == 0 || len(req.Entry[0].Changes[0].Value.Messages) == 0 {
 		c.JSON(http.StatusOK, gin.H{"status": "Nenhuma mensagem recebida"})
 		return
@@ -330,6 +328,10 @@ func handleWhatsAppWebhook(c *gin.Context) {
 	message := req.Entry[0].Changes[0].Value.Messages[0]
 	from := message.From
 	body := strings.ToLower(strings.TrimSpace(message.Text.Body))
+
+	secrets, _ := accessSecretVersion(from)
+	binanceApiKey = secrets.Value["BINANCE_API_KEY"].(string)
+	binanceSecretKey = secrets.Value["BINANCE_SECRET_KEY"].(string)
 
 	switch {
 	case strings.Contains(body, "saldo") && strings.Contains(body, "reais"):
@@ -422,14 +424,14 @@ func replyWhatsApp(to string, message string) {
 		log.Fatalf("Can't marshal to JSON: %s", err)
 	}
 
-	urlApiWhatsApp := fmt.Sprintf("%s/%s/messages", os.Getenv("WHATSAPP_API_URL"), os.Getenv("WHATSAPP_PHONE_ID"))
+	urlApiWhatsApp := fmt.Sprintf("%s/%s/messages", whatsappApiUrl, whatsappPhoneId)
 
 	req, err := http.NewRequest("POST", urlApiWhatsApp, bytes.NewBuffer(bytesRepresentation))
 	if err != nil {
 		log.Fatalf("Can't create new request: %s", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("WHATSAPP_TOKEN"))
+	req.Header.Set("Authorization", "Bearer "+whatsappToken)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -486,4 +488,49 @@ func logInfo(message string) {
 		Severity:  logging.Info,
 		Payload:   message,
 	})
+}
+
+type Secret struct {
+	Name  string
+	Value map[string]interface{}
+}
+
+func accessSecretVersion(name string) (*Secret, error) {
+
+	// Create the client.
+	ctx := context.Background()
+	client, err := secretmanager.NewClient(ctx, option.WithCredentialsFile("/Users/jerrymartins/.config/gcloud/application_default_credentials.json"))
+	if err != nil {
+		log.Fatalf("failed to setup client: %v", err)
+	}
+	defer client.Close()
+
+	accessRequest := &secretmanagerpb.AccessSecretVersionRequest{
+		Name: buildSecretPath(name),
+	}
+
+	// Call the API.
+	result, err := client.AccessSecretVersion(ctx, accessRequest)
+	if err != nil {
+		logError("failed to access secret version", err, nil)
+		return nil, err
+	}
+
+	var secretData map[string]interface{}
+	if err := json.Unmarshal(result.Payload.Data, &secretData); err != nil {
+		logError("failed to unmarshal secret data", err, nil)
+		return nil, err
+	}
+
+	secret := &Secret{
+		Name:  name,
+		Value: secretData,
+	}
+
+	return secret, nil
+}
+
+func buildSecretPath(secretName string) string {
+	projectID := "425135792660"
+	return fmt.Sprintf("projects/%s/secrets/%s/versions/latest", projectID, secretName)
 }
