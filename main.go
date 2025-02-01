@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
-	"google.golang.org/api/option"
 	"io"
 	"log"
 	"net/http"
@@ -499,7 +498,7 @@ func accessSecretVersion(name string) (*Secret, error) {
 
 	// Create the client.
 	ctx := context.Background()
-	client, err := secretmanager.NewClient(ctx, option.WithCredentialsFile("/Users/jerrymartins/.config/gcloud/application_default_credentials.json"))
+	client, err := secretmanager.NewClient(ctx)
 	if err != nil {
 		log.Fatalf("failed to setup client: %v", err)
 	}
