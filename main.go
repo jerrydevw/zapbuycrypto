@@ -162,11 +162,6 @@ func buyCrypto(symbol string, fiatAmount float64) map[string]interface{} {
 	return response
 }
 
-func isTradingPairValid(pair string) bool {
-	// todo
-	return true
-}
-
 func hasSufficientBalance(accountInfo *AccountInfo, asset string, requiredAmount float64) bool {
 	for _, balance := range accountInfo.Balances {
 		if balance.Asset == asset {
