@@ -60,10 +60,10 @@ func main() {
 
 	r := gin.Default()
 
-	r.POST("/whatsapp/webhook", handleWhatsAppWebhook)
-	r.GET("/whatsapp/webhook", verifyWebhook)
+	r.POST("/api/whatsapp/webhook", handleWhatsAppWebhook)
+	r.GET("/api/whatsapp/webhook", verifyWebhook)
 
-	r.GET("/health-check", healthCheck)
+	r.GET("/api/health-check", healthCheck)
 
 	err = r.Run(":8080")
 	if err != nil {
